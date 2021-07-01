@@ -1,0 +1,23 @@
+{
+	"file_type_grey_list": ["WS"],
+	"data_type_grey_list": ["HF", "RF"],
+	"checkDimensions": true,
+	"checkValidData": true,
+	"checkVerticalAxis": true,
+	"checkDataMode": true,
+	"data_mode": {
+		"A": [["A"]],
+		"D": [["D"]],
+		"R": [["R"]],
+		"M": [["A", "D"], ["D", "R"], ["A", "D", "R"], ["A", "R"]]
+	},
+	"global_attributes": {
+		"identification": ["platform_code", "id", "source"],
+		"geo_spatial_temporal": ["geospatial_lat_min", "geospatial_lat_max", "geospatial_lon_min", "geospatial_lon_max", "geospatial_vertical_min", "geospatial_vertical_max", "time_coverage_start", "time_coverage_end"],
+		"provenance": ["last_valid_observation"]
+	},
+	"valid_coordinate_variables_QC": [1, 2, 5, 7, 8],
+	"valid_lat_lon_delta": 0.01,
+	"valid_depth_delta": 0.01,
+	"valid_seconds_delta": 0.5
+}
