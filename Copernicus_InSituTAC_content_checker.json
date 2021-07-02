@@ -5,6 +5,8 @@
 	"checkValidData": true,
 	"checkVerticalAxis": true,
 	"checkDataMode": true,
+	"checkCdmDataType": true,
+	"cdm_data_type": ["timeSeries","trajectory","profile", "grid"],
 	"data_mode": {
 		"A": [["A"]],
 		"D": [["D"]],
@@ -17,7 +19,7 @@
 		"provenance": ["last_valid_observation"]
 	},
 	"valid_coordinate_variables_QC": [1, 2, 5, 7, 8],
-	"valid_lat_lon_delta": 0.01,
-	"valid_depth_delta": 0.01,
+	"valid_lat_lon_delta": 0.00001,
+	"valid_depth_delta": 0.00001,
 	"valid_seconds_delta": 0.5
 }

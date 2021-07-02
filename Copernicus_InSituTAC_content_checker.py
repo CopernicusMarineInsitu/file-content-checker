@@ -21,7 +21,7 @@ from os.path import isdir, isfile, basename
 
 dm_label = '_DM'
 qc_label = '_QC'
-
+VERSION = '1.2'
 
 class ContentChecker:
     def __init__(self, file_name, conf):
@@ -49,8 +49,8 @@ class ContentChecker:
             = self.createDataMasks()
 
         if hasCrossedMeridian180(self.ds.variables['LONGITUDE'][:]):
-            print("%s;ok;info;Platform crossed meridian 180;;v1.1"
-                  % self.filename_parts_list)
+            print("%s;ok;info;Platform crossed meridian 180;;%s"
+                  % (self.filename_parts_list, VERSION))
 
     def getVerticalAxisLabel(self):
         z_axis_variable = ""
@@ -153,8 +153,8 @@ class ContentChecker:
                 pp_label = variable.replace(qc_label, '')
                 if pp_label not in self.ds.variables:
                     print("%s;ok;error;no <PARAM> "
-                          "for checkFillValueQC() test;%s;v1.1"
-                          % (self.filename_parts_list, pp_label))
+                          "for checkFillValueQC() test;%s;%s"
+                          % (self.filename_parts_list, pp_label, VERSION))
                     continue
                 pp_data = self.ds.variables[pp_label]
                 fillValue_pp_mask = np.isin(
@@ -165,7 +165,7 @@ class ContentChecker:
                 if np.any(np.isin(masked_qc_data, self.valid_qc)):
                     # print(masked_qc_data)
                     print("%s;ok;error;<PARAM> has FillValues with valid QC;"
-                          "%s;v1.1" % (self.filename_parts_list, pp_label))
+                          "%s;%s" % (self.filename_parts_list, pp_label, VERSION))
                     self.status = 'error'
 
                 fillValue_qc_mask = np.isin(
@@ -174,8 +174,8 @@ class ContentChecker:
 
                 if np.any(masked_pp_data.compressed()):
                     # print(masked_pp_data.compressed())
-                    print("%s;ok;error;<PARAM> has values not QCed;%s;"
-                          "v1.1" % (self.filename_parts_list, pp_label))
+                    print("%s;ok;error;<PARAM> has values not QCed;%s;%s" %
+                          (self.filename_parts_list, pp_label, VERSION))
                     self.status = 'error'
 
     def checkFillValueDM(self):
@@ -190,8 +190,8 @@ class ContentChecker:
                 if not np.all(np.equal(dm_mask, pp_mask)):
                     self.status = 'info'
                     print("%s;ok;info;_FillValues don't match for "
-                          "<PARAM> and <PARAM>_DM;%s;v1.1"
-                          % (self.filename_parts_list, pp_label))
+                          "<PARAM> and <PARAM>_DM;%s;%s"
+                          % (self.filename_parts_list, pp_label, VERSION))
 
     def checkVerticalAxis(self):
         # check if vertical axis has any time step with no value
@@ -204,8 +204,17 @@ class ContentChecker:
                     fillValue_z_axis_mask, axis=1, dtype=bool)):
                 self.status = 'info'
                 print("%s;ok;info;vertical axis has time step filled"
-                      " with only _FillValue;%s;v1.1"
-                      % (self.filename_parts_list, self.z_axis_label))
+                      " with only _FillValue;%s;%s"
+                      % (self.filename_parts_list, self.z_axis_label, VERSION))
+
+    def checkCdmDataType(self):
+        if self.conf['checkCdmDataType']:
+            cdm_data_type_dict = {}
+            cdm_data_type_dict = self.conf["cdm_data_type"]
+            cdm_data_type = getattr(self.ds, 'cdm_data_type')
+            if cdm_data_type not in cdm_data_type_dict:
+                print("%s;ok;info;cdm_data_type not correct;%s;%s"
+                      % (self.filename_parts_list, cdm_data_type, VERSION))
 
     def checkDataMode(self):
         if self.conf['checkDataMode']:
@@ -232,15 +241,15 @@ class ContentChecker:
                         if len(dm_values_list) == 0:
                             self.status = 'info'
                             print("%s;ok;info;<PARAM>_DM contains only "
-                                  "FillValues;%s;v1.1"
-                                  % (self.filename_parts_list, dm_variable))
+                                  "FillValues;%s;%s"
+                                  % (self.filename_parts_list, dm_variable, VERSION))
 
                         if sorted(dm_values_list) not in \
                                 self.conf["data_mode"][var_dm]:
                             self.status = 'info'
                             print("%s;ok;info;<PARAM>:data_mode not consistent"
-                                  " with <PARAM>_DM values;%s;v1.1"
-                                  % (self.filename_parts_list, variable))
+                                  " with <PARAM>_DM values;%s;%s"
+                                  % (self.filename_parts_list, variable, VERSION))
 
                     # no <PARAM>_DM variable but <PARAM>:data_mode = M
                     else:
@@ -248,8 +257,8 @@ class ContentChecker:
                             self.status = 'info'
                             print("%s;ok;info;<PARAM>:data_mode = 'M' "
                                   "but no corresponding <PARAM>_DM variable;"
-                                  "%s;v1.1"
-                                  % (self.filename_parts_list, dm_variable))
+                                  "%s;%s"
+                                  % (self.filename_parts_list, dm_variable, VERSION))
 
             # check at file level
                 # print(data_mode_dict)
@@ -261,15 +270,15 @@ class ContentChecker:
                 if ga_dm != 'M':
                     self.status = 'info'
                     print("%s;ok;info;global attribute data_mode not consistent"
-                          " with data_mode <PARAM> attributes;GA should be 'M';"
-                          "v1.1" % self.filename_parts_list)
+                          " with data_mode <PARAM> attributes;GA should be 'M';%s"
+                          % (self.filename_parts_list, VERSION))
 
             elif data_mode_list not in self.conf["data_mode"][ga_dm]:
                 self.status = 'info'
                 print("%s;ok;info;global attribute data_mode not consistent "
                       "with data_mode <PARAM> attributes;"
-                      "GA: %s;v1.1"
-                      % (self.filename_parts_list, ga_dm))
+                      "GA: %s;%s"
+                      % (self.filename_parts_list, ga_dm, VERSION))
 
     def checkFilenamePattern(self):
         pattern = "(AR|BO|BS|GL|IR|MO|NO)_" \
@@ -287,8 +296,8 @@ class ContentChecker:
             if split_filename[3] != platform_code:
                 self.status = 'info'
                 print("%s;ok;info;platform_code: difference between filename "
-                      "and global attribute;;v1.1"
-                      % self.filename_parts_list)
+                      "and global attribute;;%s"
+                      % (self.filename_parts_list, VERSION))
 
     def checkID(self):
         if 'id' in self.conf_global_att['identification']:
@@ -299,8 +308,8 @@ class ContentChecker:
             if file_without_extension != id_ga_attribute:
                 self.status = 'info'
                 print("%s;ok;info;id: difference between filename "
-                      "and global attribute;;v1.1"
-                      % self.filename_parts_list)
+                      "and global attribute;;%s"
+                      % (self.filename_parts_list, VERSION))
 
     def checkGeoLatMin(self):
         if 'geospatial_lat_min' in \
@@ -314,8 +323,8 @@ class ContentChecker:
                     self.conf_lat_lon:
                 self.status = 'info'
                 print("%s;ok;info;geospatial_lat_min: min value different "
-                      "from global attribute;%s vs %s;v1.1"
-                      % (self.filename_parts_list, value_min_lat, ga_lat_min))
+                      "from global attribute;%s vs %s;%s"
+                      % (self.filename_parts_list, value_min_lat, ga_lat_min, VERSION))
 
     def checkGeoLatMax(self):
         if 'geospatial_lat_max' in \
@@ -330,8 +339,8 @@ class ContentChecker:
                     self.conf_lat_lon:
                 self.status = 'info'
                 print("%s;ok;info;geospatial_lat_max: max value different "
-                      "from global attribute; %s vs %s;v1.1"
-                      % (self.filename_parts_list, value_max_lat, ga_lat_max))
+                      "from global attribute; %s vs %s;%s"
+                      % (self.filename_parts_list, value_max_lat, ga_lat_max, VERSION))
 
     def getMinMaxMeridian(self, min_med=False, max_med=False):
         if min_med:
@@ -356,8 +365,8 @@ class ContentChecker:
             if abs(min_lon - ga_lon_min) > self.conf_lat_lon:
                 self.status = 'info'
                 print("%s;ok;info;geospatial_lon_min: min value different "
-                      "from global attribute;%s vs. %s;v1.1"
-                      % (self.filename_parts_list, min_lon, ga_lon_min))
+                      "from global attribute;%s vs. %s;%s"
+                      % (self.filename_parts_list, min_lon, ga_lon_min, VERSION))
 
     def checkGeoLonMax(self):
         if 'geospatial_lon_max' \
@@ -375,8 +384,8 @@ class ContentChecker:
                     self.conf_lat_lon:
                 self.status = 'info'
                 print("%s;ok;info;geospatial_lon_max: max value different "
-                      "from global attribute;%s vs %s;v1.1"
-                      % (self.filename_parts_list, max_lon, ga_lon_max))
+                      "from global attribute;%s vs %s;%s"
+                      % (self.filename_parts_list, max_lon, ga_lon_max, VERSION))
 
     def checkTimeCovStart(self):
         if 'time_coverage_start' \
@@ -395,9 +404,9 @@ class ContentChecker:
                     > self.conf_time:
                 self.status = 'info'
                 print("%s;ok;info;time_coverage_start: min value different "
-                      "from global attribute; %s vs %s;v1.1"
+                      "from global attribute; %s vs %s;%s"
                       % (self.filename_parts_list, time_coverage_min,
-                         time_coverage_start))
+                         time_coverage_start, VERSION))
 
     def checkTimeCovEnd(self):
         if 'time_coverage_end' \
@@ -418,9 +427,9 @@ class ContentChecker:
                     > self.conf_time:
                 self.status = 'info'
                 print("%s;ok;info;time_coverage_end: max value different from "
-                      "global attribute;%s vs %s;v1.1"
+                      "global attribute;%s vs %s;%s"
                       % (self.filename_parts_list, time_coverage_max,
-                         time_coverage_end))
+                         time_coverage_end, VERSION))
 
     def checkGeoVertMin(self):
         if 'geospatial_vertical_min' \
@@ -438,14 +447,14 @@ class ContentChecker:
                     self.status = 'info'
                     print("%s;ok;info;geospatial_vertical_min: "
                           "min value different from global attribute;"
-                          "%s vs %s;v1.1"
+                          "%s vs %s;%s"
                           % (self.filename_parts_list, z_axis_min,
-                             geospatial_vertical_min))
+                             geospatial_vertical_min, VERSION))
             else:
                 self.status = 'info'
                 print("%s;ok;info;geospatial_vertical_min: global "
-                      "attribute has no value;;v1.1"
-                      % self.filename_parts_list)
+                      "attribute has no value;;%s"
+                      % self.filename_parts_list, VERSION)
 
     def checkGeoVertMax(self):
         if 'geospatial_vertical_max' \
@@ -463,14 +472,14 @@ class ContentChecker:
                     self.status = 'info'
                     print("%s;ok;info;geospatial_vertical_max: "
                           "max value different from global attribute;"
-                          "%s vs %s;v1.1"
+                          "%s vs %s;%s"
                           % (self.filename_parts_list, z_axis_max,
-                             geospatial_vertical_max))
+                             geospatial_vertical_max, VERSION))
             else:
                 self.status = 'info'
                 print("%s;ok;info;geospatial_vertical_max: "
-                      "global attribute has no value;;v1.1"
-                      % self.filename_parts_list)
+                      "global attribute has no value;;%s"
+                      % (self.filename_parts_list, VERSION))
 
     def checkLastValidObs(self):
         if 'last_valid_observation' \
@@ -503,9 +512,9 @@ class ContentChecker:
                     > self.conf_time:
                 self.status = 'info'
                 print("%s;ok;info;last_date_observation : last valid value "
-                      "different from global attribute;%s vs %s;v1.1"
+                      "different from global attribute;%s vs %s;%s"
                       % (self.filename_parts_list, last_date_data,
-                         last_date_att))
+                         last_date_att, VERSION))
 
             last_lat_att = \
                 float(getattr(self.ds, 'last_latitude_observation'))
@@ -513,9 +522,8 @@ class ContentChecker:
                     self.conf_lat_lon:
                 self.status = 'info'
                 print("%s;ok;info;last_latitude_observation : last valid value "
-                      "different from global attribute;%s vs %s;v1.1"
-                      % (self.filename_parts_list, last_lat_data,
-                         last_lat_att))
+                      "different from global attribute;%s vs %s;%s"
+                      % (self.filename_parts_list, last_lat_data, last_lat_att, VERSION))
 
             last_lon_att = \
                 float(getattr(self.ds, 'last_longitude_observation'))
@@ -523,9 +531,8 @@ class ContentChecker:
                     self.conf_lat_lon:
                 self.status = 'info'
                 print("%s;ok;info;last_longitude_observation : last valid value"
-                      " different from global attribute;%s vs %s;v1.1"
-                      % (self.filename_parts_list, last_lon_data,
-                         last_lon_att))
+                      " different from global attribute;%s vs %s;%s"
+                      % (self.filename_parts_list, last_lon_data, last_lon_att, VERSION))
 
 
 def add_duration(date_begin):
@@ -658,6 +665,7 @@ def main():
                 cc.checkValidData()
                 cc.checkFillValueQC()
                 cc.checkVerticalAxis()
+                cc.checkCdmDataType()
                 cc.checkDataMode()
 
                 # naming global attributes tests
@@ -681,13 +689,13 @@ def main():
 
                 # if passed
                 if cc.status == 'ok':
-                    print("%s;ok;ok;;;v1.1;" % cc.filename_parts_list)
+                    print("%s;ok;ok;;;%s;" % (cc.filename_parts_list, VERSION))
 
                 cc.close_ds()
 
             except Exception as e:
-                print("%s;ko;;%s;;v1.1;" %
-                      (splitForPrintFilename(file_paths[i]), e))
+                print("%s;ko;;%s;;%s;" %
+                      (splitForPrintFilename(file_paths[i]), e, VERSION))
 
     else:
         print("\nIncorrect number of arguments: \n"
