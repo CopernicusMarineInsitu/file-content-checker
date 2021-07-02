@@ -21,7 +21,7 @@ from os.path import isdir, isfile, basename
 
 dm_label = '_DM'
 qc_label = '_QC'
-VERSION = '1.2'
+VERSION = '1.4'
 
 class ContentChecker:
     def __init__(self, file_name, conf):
