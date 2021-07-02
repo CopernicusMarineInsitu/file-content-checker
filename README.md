@@ -1,4 +1,4 @@
-# Copernicus NetCDF4 file content checker (v1.1)
+# Copernicus NetCDF4 file content checker (v1.4)
  
 ## Activate a conda environment with python=3.6 and netCDF4 packages installed
 
