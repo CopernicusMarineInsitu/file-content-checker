@@ -1,5 +1,10 @@
 # Copernicus NetCDF4 file content checker (v1.4)
- 
+
+## Updates:
+
+* Generate XML output
+* Accept Wave Spectra files
+
 ## Activate a conda environment with python=3.6 and netCDF4 packages installed
 
 ## Execute following command :
