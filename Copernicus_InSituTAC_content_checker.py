@@ -2,33 +2,331 @@
 # -*- coding: utf-8 -*-
 # ****************************************************************************
 #
-# ROL : Check netCDF file content
+# ROL : Netcdf Content Checker Standalone Version
 #
 # ****************************************************************************
 #
-# HST : 12/01/2021	Creation
+# HST : 05/04/2021 ED  Creation
 #
 # ****************************************************************************
 
 from netCDF4 import Dataset, num2date, chartostring
-from datetime import datetime, timedelta
+import datetime
 import numpy as np
 import sys
 import json
 import re
 from os import listdir, environ
-from os.path import isdir, isfile, basename
+from os.path import isdir, isfile, basename, dirname
 
+from math import cos, acos, sin
+
+"""
+    Process function identification
+"""
+_function = "CO-03-08-05"
+_comment = "Netcdf Content Checker based on Copernicus_InSituTAC_content_checker"
+
+"""
+    Content Checker Variables
+"""
 dm_label = '_DM'
 qc_label = '_QC'
-VERSION = '1.4'
+adjusted_label = '_ADJUSTED'
+VERSION = '1.5'
 
-class ContentChecker:
+_checkerContentError = 'file_error'
+_checkerContentWarning = 'file_warning'
+_checkerContentInfo = 'file_info'
+_checkerFileCompliantLabel = 'file is compliant'
+
+"""
+    Position Tools Variables
+"""
+_PI_RADIAN = 3.141592653589793238
+_PI_DEGREE = 180.0
+_RAYON = 6371000.0
+
+
+class XmlReport():
+    _xmlHeader = "<?xml version=\"1.0\"?>"
+    _reportTag = "coriolis_function_report"
+    _functionTag = "function"
+    _commentTag = "comment"
+    _dateTag = "date"
+    _warningTag = "warning"
+    _infoTag = "info"
+    _errorTag = "error"
+    _statusTag = "status"
+    _statusOk = "ok"
+    _statusNok = "ko"
+    _durationTag = "duration"
+
+    def __init__(self):
+        """
+         Constructor
+        """
+        self.dateBegin = datetime.datetime.now()
+        self.tags = {}
+        self.level = ""
+        self.blockTagCounter = 0
+
+    def openTag(self, tag):
+        """
+         Open tag
+        """
+        self.out("<" + tag + ">")
+        self.blockTagCounter = self.blockTagCounter + 1
+        self.level = self.indent((len(self.tags) + self.blockTagCounter) * 4, " ")
+
+    def closeTag(self, tag):
+        """
+         Close tag
+        """
+        self.blockTagCounter = self.blockTagCounter - 1
+        self.level = self.indent((len(self.tags) + self.blockTagCounter) * 4, " ")
+        self.out("<" + tag + "/>")
+
+    def begin(self, function, comment):
+        """
+         Report initiliazation (header, function, comment, and date begin)
+        """
+        self.out(self._xmlHeader)
+        self.incrementLevel(self._reportTag)
+        self.addValue(self._functionTag, function)
+        self.addValue(self._commentTag, comment)
+        self.addValue(self._dateTag, self.dateBegin.strftime("%Y-%m-%d %H:%M:%S"))
+
+    def incrementLevel(self, tag):
+        """
+         Increment level and add a new parent tag
+        """
+        self.out('<' + tag + '>')
+        self.tags[tag] = ""
+        self.level = self.indent(len(self.tags) * 4, " ")
+
+    def addValues(self, tags):
+        """
+         Add tag and value from a dict
+        """
+        for tag, value in tags.items():
+            self.addValue(tag, value)
+
+    def addValue(self, tag, value):
+        """
+         Add tag and value
+        """
+        self.out("<" + tag + ">" + str(value) + "</" + tag + ">")
+
+    def indent(self, itr, str):
+        """
+         Increment level
+        """
+        if itr > 0:
+            return str + " " + self.indent(itr - 1, str)
+        else:
+            return str
+
+    def outWithoutCR(self, output):
+        """
+         print tag without new line
+        """
+        sys.stdout.write(self.level + output)
+
+    def out(self, output):
+        """
+         print tag with a new line
+        """
+        print(self.level + output)
+
+    def addStatusOk(self):
+        """
+         Print status ok tag
+        """
+        self.out("<" + self._statusTag + ">" + self._statusOk + "</" + self._statusTag + ">")
+
+    def addStatusNok(self):
+        """
+         Print status ko tag
+        """
+        self.out("<" + self._statusTag + ">" + self._statusNok + "</" + self._statusTag + ">")
+
+    def addError(self, error):
+        """
+         Print status error tag
+        """
+        self.out("<" + self._errorTag + ">" + str(error) + "</" + self._errorTag + ">")
+
+    def addWarning(self, warning):
+        """
+         Print status warning tag
+        """
+        self.out("<" + self._warningTag + ">" + str(warning) + "</" + self._warningTag + ">")
+
+    def addInfo(self, info):
+        """
+         Print status info tag
+        """
+        self.out("<" + self._infoTag + ">" + str(info) + "</" + self._infoTag + ">")
+
+    def addDuration(self):
+        """
+         Print duration tag
+        """
+        dateEnd = datetime.datetime.now()
+        durationDate = dateEnd - self.dateBegin
+        hours, remainder = divmod(durationDate.seconds, 3600)
+
+        # Compute hours
+        days = durationDate.days
+        hours += days * 24
+
+        # Compute minutes/seconds
+        minutes, seconds = divmod(remainder, 60)
+        self.out("<" + self._durationTag + ">" + '%s:%s:%s' % (
+            str(hours).zfill(2), str(minutes).zfill(2), str(seconds).zfill(2)) + "</" + self._durationTag + ">")
+
+    def end(self):
+        """
+         Close xml report
+        """
+        self.level = self.indent((len(self.tags) - 1) * 4, " ")
+        self.out("</" + self._reportTag + ">")
+
+
+class PositionTools:
+
+    @staticmethod
+    def computeDistancesBetweenTwoPositions(latitude1, longitude1, latitude2, longitude2):
+        """
+            Compute speed between two positions
+        """
+        l_lat1 = (latitude1 * _PI_RADIAN) / _PI_DEGREE
+        l_lon1 = (longitude1 * _PI_RADIAN) / _PI_DEGREE
+        l_lat2 = (latitude2 * _PI_RADIAN) / _PI_DEGREE
+        l_lon2 = (longitude2 * _PI_RADIAN) / _PI_DEGREE
+
+        l_dlon = l_lon2 - l_lon1
+
+        if l_dlon < -_PI_RADIAN:
+            l_dlon += 2 * _PI_DEGREE
+            l_dlon += 2 * _PI_RADIAN
+
+        if l_dlon > _PI_RADIAN:
+            l_dlon -= 2 * _PI_DEGREE
+            l_dlon -= 2 * _PI_RADIAN
+
+        distanceX = _RAYON * cos((l_lat1 + l_lat2) / 2) * l_dlon
+        distanceY = _RAYON * (l_lat2 - l_lat1)
+        angle = cos(l_lat1) * cos(l_lat2) * cos(l_lon1 - l_lon2) + sin(l_lat1) * sin(l_lat2)
+
+        if angle > 1.0:
+            angle = 1.0
+        elif angle < -1.0:
+            angle = -1
+
+        distance = _RAYON * acos(angle)
+
+        return distanceX, distanceY, distance
+
+    @staticmethod
+    def computeLongitudeMinMax(longitudes):
+        go_around_world = False
+        meridian180 = False
+        min_lon = None
+        max_lon = None
+        previous_longitude = None
+
+        for longitude in longitudes:
+            if min_lon is None and max_lon is None:
+                """ Initialize """
+                min_lon = longitude
+                max_lon = longitude
+                previous_longitude = longitude
+                continue
+
+            if not go_around_world:
+                if not meridian180:
+                    if max_lon - longitude > 180 and previous_longitude * longitude < 0:
+                        max_lon = longitude
+                        meridian180 = True
+                    elif min_lon - longitude < -180 and previous_longitude * longitude < 0:
+                        min_lon = longitude
+                        meridian180 = True
+                    else:
+                        if longitude > max_lon:
+                            max_lon = longitude
+                        elif longitude < min_lon:
+                            min_lon = longitude
+                else:
+                    if 0 < longitude < min_lon:
+                        min_lon = longitude
+                    elif 0 > longitude > max_lon:
+                        max_lon = longitude
+
+                    if max_lon > min_lon:
+                        go_around_world = True
+                        min_lon = -180
+                        max_lon = 180
+
+            previous_longitude = longitude
+        return min_lon, max_lon
+
+
+class ContentCheckerUtils:
+
+    @staticmethod
+    def _splitForPrintFilename(filename):
+        no_extension = basename(filename).replace('.nc', '')
+        file_parts = re.split('_', no_extension)
+        if len(file_parts) < 5:
+            file_parts.append(' ')
+        return ';'.join(file_parts)
+
+    @staticmethod
+    def _readTimeValue(days_since):
+        return num2date(days_since, units="days since 1950-01-01T00:00:00Z")
+
+    @staticmethod
+    def _roundDatetimeToSecond(dt):
+        rounding = (dt.microsecond + 500000) // 1000000
+        return dt + datetime.timedelta(0, rounding, -dt.microsecond)
+
+    @staticmethod
+    def _hasCrossedMeridian180(longitudes):
+        if max(longitudes) - min(longitudes) > 180:
+            return True
+        else:
+            return False
+
+    # @staticmethod
+    # def roundValue(value, decimals: str) -> float:
+    #     return float(Decimal(float(value)).quantize(Decimal(decimals), rounding=ROUND_HALF_UP))
+
+    @staticmethod
+    def floatToFilledStringSafe(float: np.float, digits: int) -> str:
+        """ Convert float to string with trailing zeros up to N digits, without altering value if more than N digits """
+        if not isinstance(float, np.float):
+            raise TypeError("floatToFilledStringSafe: value is not a float")
+        return str(float).split('.')[0] + '.' + str(float).split('.')[1].ljust(digits, '0')
+
+    def getDataTypeMinMax(self, data_type):
+        """ Get Min Max of specified data type : integers or float only else return None, None """
+        data_type_info = None
+        if data_type in (int, np.int, np.int8, np.int16, np.int32, np.int64):
+            data_type_info = np.iinfo(data_type)
+        elif data_type in (float, np.float, np.float16, np.float32, np.float64):
+            data_type_info = np.finfo(data_type)
+        return (data_type_info.min, data_type_info.max) if data_type_info is not None else (None, None)
+
+
+class ContentChecker(ContentCheckerUtils):
     def __init__(self, file_name, conf):
         environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
         self.file = file_name
         self.file_basename = basename(file_name)
-        self.filename_parts_list = splitForPrintFilename(file_name)
+        self.filename_parts_list = self._splitForPrintFilename(file_name)
+        self.file_type = self.file_basename.split('_')[1]
         self.status = 'ok'
 
         self.conf = conf
@@ -37,24 +335,27 @@ class ContentChecker:
         self.conf_lat_lon = self.conf['valid_lat_lon_delta']
         self.conf_depth = self.conf['valid_depth_delta']
         self.conf_time = self.conf['valid_seconds_delta']
+        self.conf_format_coord = self.conf['format_coordinates']
+        self.conf_format_depth = self.conf['format_deph']
 
         self.ds = Dataset(file_name, 'r', format='NETCDF4_CLASSIC')
-        self.z_axis_label = self.getVerticalAxisLabel()
+        self.z_axis_label = self.getVerticalAxisLabel() \
+            if self.file_type != self.conf['spectra_file_pattern'] else None
 
         self.checkDimensions()
+        self.checkDimensionsNames()
+        self.checkVarAttrType()
+        self.checkDataNaNf()
 
-        self.valid_data_mask, self.valid_time, self.valid_lat, \
-            self.valid_lon, self.valid_z_axis, \
-            self.one_dim_valid_data_mask \
-            = self.createDataMasks()
+        (self.valid_data_mask, self.valid_time, self.valid_lat, self.valid_lon, self.valid_z_axis,
+         self.valid_adj_data_mask, self.valid_z_adj_axis, self.one_dim_valid_data_mask) = self.createDataMasks()
 
-        if hasCrossedMeridian180(self.ds.variables['LONGITUDE'][:]):
-            print("%s;ok;info;Platform crossed meridian 180;;%s"
-                  % (self.filename_parts_list, VERSION))
+        if self._hasCrossedMeridian180(self.ds.variables['LONGITUDE'][:]):
+            xmlReport.addValue(_checkerContentInfo, "Platform crossed meridian 180")
 
     def getVerticalAxisLabel(self):
         z_axis_variable = ""
-        for variable in self.ds.variables.keys():
+        for variable in self.getDsVariablesNameList():
             if variable in ('DEPH', 'PRES'):
                 if 'axis' in self.ds[variable].ncattrs():
                     if self.ds[variable].axis is 'Z':
@@ -64,61 +365,123 @@ class ContentChecker:
         else:
             return z_axis_variable
 
+    def getDsVariablesNameList(self) -> list:
+        return list(self.ds.variables.keys())
+
+    def getDsDimensionNameList(self) -> list:
+        return list(self.ds.dimensions.keys())
+
     def checkDimensions(self):
         # check if TIME, LATITUDE and LONGITUDE dimensions are the same
         # or if LATITUDE and LONGITUDE dimension = 1 or
         # if POSITION have same dimension as LATITUDE/LONGITUDE
         if self.conf['checkDimensions']:
             dim_dict = {}
-            for variable in self.ds.dimensions.keys():
+            for variable in self.getDsDimensionNameList():
                 if variable in ('TIME', 'DEPTH', 'LATITUDE', 'LONGITUDE'
                                 , 'POSITION'):
                     dim_dict[variable] = self.ds.dimensions[variable].size
 
-            if (dim_dict['LATITUDE'] or dim_dict['LONGITUDE']) \
-                    != dim_dict['POSITION'] \
-                    or dim_dict['LATITUDE'] != dim_dict['LONGITUDE']:
+            if ((dim_dict['LATITUDE'] or dim_dict['LONGITUDE']) != dim_dict['POSITION']
+                    or dim_dict['LATITUDE'] != dim_dict['LONGITUDE']):
                 raise Exception("error in coordinate variable dimensions")
-            if (dim_dict['LATITUDE'] or dim_dict['LONGITUDE']) \
-                    != dim_dict['TIME'] \
-                    and (dim_dict['LATITUDE'] or dim_dict['LONGITUDE']) != 1:
+            if ((dim_dict['LATITUDE'] or dim_dict['LONGITUDE']) != dim_dict['TIME']
+                    and (dim_dict['LATITUDE'] or dim_dict['LONGITUDE']) != 1):
                 raise Exception("error in coordinate variable dimensions")
+
+    def checkDimensionsNames(self):
+        """ Check if any dimension has variable with same name """
+        for dim in self.getDsDimensionNameList():
+            if dim in self.getDsVariablesNameList() and len(self.ds.variables[dim].dimensions) > 1:
+                self.status = _checkerContentError
+                xmlReport.addValue(_checkerContentError, f"{dim}: dimension and parameter with same name")
+
+    def checkVarAttrType(self):
+        """ Check if _fillValue, valid_min and valid_max have same data type than linked variable """
+        file_is_valid = True
+        for variable_name, variable in self.ds.variables.items():
+            if ("valid_min" in variable.ncattrs() and type(variable.valid_min) != variable.dtype
+                    and not (variable.dtype == np.float32 and type(variable.valid_min) == np.float64)
+                    and not (variable.dtype == np.float64 and type(variable.valid_min) == np.float32)):
+                file_is_valid = False
+                self.status = _checkerContentError
+                xmlReport.addValue(_checkerContentError,
+                                   f"{variable_name}: data types are different between variable and valid_min")
+            if ("valid_max" in variable.ncattrs() and type(variable.valid_max) != variable.dtype
+                    and not (variable.dtype == np.float32 and type(variable.valid_min) == np.float64)
+                    and not (variable.dtype == np.float64 and type(variable.valid_min) == np.float32)):
+                file_is_valid = False
+                self.status = _checkerContentError
+                xmlReport.addValue(_checkerContentError,
+                                   f"{variable_name}: data types are different between variable and valid_max")
+        if not file_is_valid:
+            raise Exception("parameter attributes type errors")
+
+    def checkDataNaNf(self):
+        """ Check if NaNf are found in file data """
+        nan_found = False
+        with np.errstate(invalid='ignore'):
+            for variable in self.getDsVariablesNameList():
+                if (self.ds.variables[variable].dtype in (np.float32, np.float64, np.int8, np.int32) and
+                        np.any(np.isnan(self.ds.variables[variable][:].data))):
+                    nan_found = True
+                    xmlReport.addValue(_checkerContentError, f"{variable}: NaNf values founds in data")
+        if nan_found:
+            raise Exception("NaNf values founds")
 
     def createDataMasks(self):
         # create masks from TIME_QC, POSITION_QC, <z_axis>_QC
         # with valid_QC values. Applied on one and two dimensions coord var
+        """ TIME & POSITION """
         lat_values = self.ds.variables['LATITUDE'][:]
         lon_values = self.ds.variables['LONGITUDE'][:]
         time_values = self.ds.variables['TIME'][:]
-        z_axis_values = self.ds.variables[self.z_axis_label][:]
 
         time_qc_values = self.ds.variables['TIME_QC'][:]
         position_qc_values = self.ds.variables['POSITION_QC'][:]
-        z_axis_qc_values = self.ds.variables[self.z_axis_label + qc_label][:]
 
         time_qc_mask = np.isin(time_qc_values, self.valid_qc)
         position_qc_mask = np.isin(position_qc_values, self.valid_qc)
         coord_mask = np.logical_and(time_qc_mask, position_qc_mask)
-        z_axis_qc_mask = np.isin(z_axis_qc_values, self.valid_qc)
 
         time_dim = self.ds.dimensions['TIME'].size
-        valid_data_mask = np.logical_and(
-            coord_mask.reshape(time_dim, 1), z_axis_qc_mask)
         valid_time = time_values[time_qc_mask]
         valid_lat = lat_values[position_qc_mask]
         valid_lon = lon_values[position_qc_mask]
 
-        # print(np.ma.array(lon_values, mask=np.invert(position_qc_mask)))
-        valid_z_axis = np.ma.MaskedArray(z_axis_values,
-                                         mask=np.invert(z_axis_qc_mask))
+        """ Z AXIS """
+        valid_z_axis = None
+        valid_z_adj_axis = None
+        valid_adj_data_mask = None
+        if self.z_axis_label is not None:
+            z_axis_values = self.ds.variables[self.z_axis_label][:]
+            z_axis_qc_values = self.ds.variables[self.z_axis_label + qc_label][:]
+            z_axis_mask = np.isin(z_axis_qc_values, self.valid_qc)
 
-        # mask to get valid time/lat/lon obs
-        # taking vertical axis QCs into account
-        one_dim_z_axis_qc_mask = np.sum(z_axis_qc_mask, axis=1, dtype=bool)
-        one_dim_valid_data_mask = np.logical_and(
-            coord_mask, one_dim_z_axis_qc_mask)
-        return valid_data_mask, valid_time, valid_lat, valid_lon, valid_z_axis \
-            , one_dim_valid_data_mask
+            valid_z_axis = np.ma.MaskedArray(z_axis_values, mask=np.invert(z_axis_mask))
+
+            if self.z_axis_label + adjusted_label in self.getDsVariablesNameList():
+                z_axis_adj_values = self.ds.variables[self.z_axis_label + adjusted_label][:]
+                z_axis_adj_qc = self.ds.variables[self.z_axis_label + adjusted_label + qc_label][:]
+                z_axis_adj_mask = np.isin(z_axis_adj_qc, self.valid_qc)
+                valid_z_adj_axis = np.ma.MaskedArray(z_axis_adj_values, mask=np.invert(z_axis_adj_mask))
+                valid_adj_data_mask = np.logical_and(coord_mask.reshape(time_dim, 1), z_axis_adj_mask)
+
+            """ Valid Data Mask """
+            valid_data_mask = np.logical_and(coord_mask.reshape(time_dim, 1), z_axis_mask)
+
+        else:
+            """ Valid Data Mask """
+            valid_data_mask = coord_mask.reshape(time_dim, 1)
+
+        """ mask to get valid time/lat/lon obs
+            taking vertical axis QCs into account -> Removed 20220321 release. """
+        # one_dim_z_axis_qc_mask = np.sum(z_axis_qc_mask, axis=1, dtype=bool)
+        # one_dim_valid_data_mask = np.logical_and(coord_mask, one_dim_z_axis_qc_mask)
+        one_dim_valid_data_mask = coord_mask
+
+        return valid_data_mask, valid_time, valid_lat, valid_lon, valid_z_axis, \
+               valid_adj_data_mask, valid_z_adj_axis, one_dim_valid_data_mask
 
     def close_ds(self):
         self.ds.close()
@@ -134,49 +497,73 @@ class ContentChecker:
             if time_data.valid_max != 90000:
                 raise Exception("error with <TIME> attributes")
             else:
-                raise Exception("<TIME> is not strictly monotonic")
+                self.status = _checkerContentError
+                xmlReport.addValue(_checkerContentError, "<TIME> is not strictly monotonic")
+
+    def checkIfDtypeBoundsValues(self):
+        """ Check if data array contains data type bounding values (example: min/max int32)"""
+        for variable in self.getDsVariablesNameList():
+            dtype_min, dtype_max = self.getDataTypeMinMax(self.ds.variables[variable].dtype)
+            if dtype_min is not None and dtype_max is not None:
+                values = self.ds.variables[variable][:].data
+                if dtype_min in values:
+                    self.status = _checkerContentError
+                    xmlReport.addValue(_checkerContentError, f"{variable}: data contains data type bounding values: " +
+                                       str(dtype_min))
+                if dtype_max in values:
+                    self.status = _checkerContentError
+                    xmlReport.addValue(_checkerContentError, f"{variable}: data contains data type bounding values: " +
+                                       str(dtype_max))
 
     def checkValidData(self):
         # check with valid_data_mask if dataset has any valid data
         if self.conf['checkValidData']:
-            if np.all(np.invert(self.valid_data_mask)):
-                raise Exception("file has no data with valid (POSITION_QC, "
-                                "TIME_QC, <z_axis>_QC)")
+            """ Test using ADJUSTED z_axis if exists"""
+            valid_data_found = False
+            z_qc_labels = f", {self.z_axis_label}_QC" if self.z_axis_label is not None else ""
+
+            if self.valid_adj_data_mask is not None:
+                z_qc_labels = f", {self.z_axis_label}_ADJUSTED_QC" + z_qc_labels
+                valid_data_found = True if not np.all(np.invert(self.valid_adj_data_mask)) else False
+
+            """ If ADJUSTED do not exists or if there is no valid data using ADJUSTED z_axis """
+            if not valid_data_found and np.all(np.invert(self.valid_data_mask)):
+                raise Exception(f"file has no data with valid (POSITION_QC, TIME_QC{z_qc_labels})")
 
     def checkFillValueQC(self):
         # check for error in QC like:
         #       <PARAM> _FillValue has valid QC in <PARAM_QC>
         #       <PARAM_QC> _FillValue has a value in <PARAM>
         for variable, qc_data in self.ds.variables.items():
-            if qc_label in variable \
-                    and variable not in ['TIME_QC', 'POSITION_QC']:
+            if qc_label in variable and variable not in ['TIME_QC', 'POSITION_QC']:
                 pp_label = variable.replace(qc_label, '')
                 if pp_label not in self.ds.variables:
-                    print("%s;ok;error;no <PARAM> "
-                          "for checkFillValueQC() test;%s;%s"
-                          % (self.filename_parts_list, pp_label, VERSION))
+                    xmlReport.addValue(_checkerContentError,
+                                       "missing parameter for checkFillValueQC() test: " + str(pp_label))
+                    self.status = _checkerContentError
                     continue
                 pp_data = self.ds.variables[pp_label]
-                fillValue_pp_mask = np.isin(
-                    pp_data, pp_data.getncattr('_FillValue'), invert=True)
-                masked_qc_data = np.ma.masked_where(
-                    fillValue_pp_mask, qc_data).compressed()
+                fillValue_pp_mask = np.isin(pp_data, pp_data.getncattr('_FillValue'), invert=True)
+                masked_qc_data = np.ma.masked_where(fillValue_pp_mask, qc_data).compressed()
 
                 if np.any(np.isin(masked_qc_data, self.valid_qc)):
-                    # print(masked_qc_data)
-                    print("%s;ok;error;<PARAM> has FillValues with valid QC;"
-                          "%s;%s" % (self.filename_parts_list, pp_label, VERSION))
-                    self.status = 'error'
+                    xmlReport.addValue(_checkerContentError, "parameter has FillValues with valid QC: " + str(pp_label))
+                    self.status = _checkerContentError
 
-                fillValue_qc_mask = np.isin(
-                    qc_data, qc_data.getncattr('_FillValue'), invert=True)
+                fillValue_qc_mask = np.isin(qc_data, qc_data.getncattr('_FillValue'), invert=True)
                 masked_pp_data = np.ma.masked_where(fillValue_qc_mask, pp_data)
 
                 if np.any(masked_pp_data.compressed()):
-                    # print(masked_pp_data.compressed())
-                    print("%s;ok;error;<PARAM> has values not QCed;%s;%s" %
-                          (self.filename_parts_list, pp_label, VERSION))
-                    self.status = 'error'
+                    xmlReport.addValue(_checkerContentError, "parameter has values not QCed: " + str(pp_label))
+                    self.status = _checkerContentError
+
+    def checkUncontrolledQC(self, extra_checked_parameters=[]):
+        """ Check if parameter have uncontrolled QC : applied on TIME and POSITION"""
+        for variable, qc_data in self.ds.variables.items():
+            if qc_label in variable and variable in ['TIME_QC', 'POSITION_QC'] + extra_checked_parameters:
+                if self.conf['uncontrolled_qc'] in qc_data[:]:
+                    self.status = _checkerContentError
+                    xmlReport.addValue(_checkerContentError, "parameter has uncontrolled QC: " + str(variable))
 
     def checkFillValueDM(self):
         for variable, dm_data in self.ds.variables.items():
@@ -188,10 +575,9 @@ class ContentChecker:
                 pp_mask = np.isin(pp_data, pp_data.getncattr('_FillValue'))
 
                 if not np.all(np.equal(dm_mask, pp_mask)):
-                    self.status = 'info'
-                    print("%s;ok;info;_FillValues don't match for "
-                          "<PARAM> and <PARAM>_DM;%s;%s"
-                          % (self.filename_parts_list, pp_label, VERSION))
+                    self.status = _checkerContentWarning
+                    xmlReport.addValue(_checkerContentWarning,
+                                       "_FillValues do not match for PARAM and PARAM_DM: " + str(pp_label))
 
     def checkVerticalAxis(self):
         # check if vertical axis has any time step with no value
@@ -200,12 +586,10 @@ class ContentChecker:
             fillValue_z_axis_mask = np.isin(
                 z_axis_data, z_axis_data.getncattr('_FillValue'), invert=True)
 
-            if not np.all(np.sum(
-                    fillValue_z_axis_mask, axis=1, dtype=bool)):
-                self.status = 'info'
-                print("%s;ok;info;vertical axis has time step filled"
-                      " with only _FillValue;%s;%s"
-                      % (self.filename_parts_list, self.z_axis_label, VERSION))
+            if not np.all(np.sum(fillValue_z_axis_mask, axis=1, dtype=bool)):
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning,
+                                   "vertical axis has time step filled with only _FillValue: " + str(self.z_axis_label))
 
     def checkCdmDataType(self):
         if self.conf['checkCdmDataType']:
@@ -213,8 +597,7 @@ class ContentChecker:
             cdm_data_type_dict = self.conf["cdm_data_type"]
             cdm_data_type = getattr(self.ds, 'cdm_data_type')
             if cdm_data_type not in cdm_data_type_dict:
-                print("%s;ok;info;cdm_data_type not correct;%s;%s"
-                      % (self.filename_parts_list, cdm_data_type, VERSION))
+                xmlReport.addValue(_checkerContentWarning, "cdm_data_type not correct: " + str(cdm_data_type))
 
     def checkDataMode(self):
         if self.conf['checkDataMode']:
@@ -239,51 +622,45 @@ class ContentChecker:
                                     dm_values_list.append(char)
 
                         if len(dm_values_list) == 0:
-                            self.status = 'info'
-                            print("%s;ok;info;<PARAM>_DM contains only "
-                                  "FillValues;%s;%s"
-                                  % (self.filename_parts_list, dm_variable, VERSION))
+                            self.status = _checkerContentWarning
+                            xmlReport.addValue(_checkerContentWarning,
+                                               f"PARAM_DM contains only FillValues: {dm_variable}")
 
-                        if sorted(dm_values_list) not in \
-                                self.conf["data_mode"][var_dm]:
-                            self.status = 'info'
-                            print("%s;ok;info;<PARAM>:data_mode not consistent"
-                                  " with <PARAM>_DM values;%s;%s"
-                                  % (self.filename_parts_list, variable, VERSION))
+                        if sorted(dm_values_list) not in self.conf["data_mode"][var_dm]:
+                            self.status = _checkerContentWarning
+                            xmlReport.addValue(_checkerContentWarning,
+                                               f"data_mode not consistent with PARAM_DM values: {variable}")
 
                     # no <PARAM>_DM variable but <PARAM>:data_mode = M
                     else:
                         if str(self.ds.variables[variable].data_mode) == 'M':
-                            self.status = 'info'
-                            print("%s;ok;info;<PARAM>:data_mode = 'M' "
-                                  "but no corresponding <PARAM>_DM variable;"
-                                  "%s;%s"
-                                  % (self.filename_parts_list, dm_variable, VERSION))
+                            self.status = _checkerContentWarning
+                            xmlReport.addValue(_checkerContentWarning,
+                                               f"PARAM:data_mode = 'M' but no corresponding PARAM_DM variable: {dm_variable}")
 
             # check at file level
-                # print(data_mode_dict)
-                # print(data_mode_list)
+            # print(data_mode_dict)
+            # print(data_mode_list)
             data_mode_list = sorted(set(data_mode_dict.values()))
             ga_dm = self.ds.getncattr('data_mode')
 
             if 'M' in data_mode_list:
                 if ga_dm != 'M':
-                    self.status = 'info'
-                    print("%s;ok;info;global attribute data_mode not consistent"
-                          " with data_mode <PARAM> attributes;GA should be 'M';%s"
-                          % (self.filename_parts_list, VERSION))
+                    self.status = _checkerContentWarning
+                    xmlReport.addValue(_checkerContentWarning,
+                                       "global attribute data_mode not consistent with " +
+                                       "PARAM:data_mode attributes: GA should be 'M'")
 
             elif data_mode_list not in self.conf["data_mode"][ga_dm]:
-                self.status = 'info'
-                print("%s;ok;info;global attribute data_mode not consistent "
-                      "with data_mode <PARAM> attributes;"
-                      "GA: %s;%s"
-                      % (self.filename_parts_list, ga_dm, VERSION))
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning,
+                                   "global attribute data_mode not consistent with " +
+                                   "PARAM data_mode attributes: GA= " + str(ga_dm))
 
     def checkFilenamePattern(self):
         pattern = "(AR|BO|BS|GL|IR|MO|NO)_" \
                   "(TS|PR|TV|RV|WS)_" \
-                  "(BO|CT|DB|DC|FB|GL|HF|ML|MO|PF|RF|SD|SF|SM|TG|TS|VA|XB|XX)" \
+                  "(BO|CT|DB|DC|FB|GL|HF|ML|MO|PF|RF|SD|SF|SM|TG|TS|TX|VA|XB|XX)" \
                   "_[^_]*(_[0-9]{8}|_[0-9]{6}|_[0-9]{4}|_[0-9]{1,4}minute|)"
         return re.match(pattern, self.file_basename)
 
@@ -294,10 +671,9 @@ class ContentChecker:
             # parse netCDF filename with '_' pattern
             split_filename = self.filename_parts_list.split(';')
             if split_filename[3] != platform_code:
-                self.status = 'info'
-                print("%s;ok;info;platform_code: difference between filename "
-                      "and global attribute;;%s"
-                      % (self.filename_parts_list, VERSION))
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning,
+                                   "platform_code: difference between filename and global attribute")
 
     def checkID(self):
         if 'id' in self.conf_global_att['identification']:
@@ -306,246 +682,182 @@ class ContentChecker:
             # get netCDF filename without suffix
             file_without_extension = self.file_basename.replace('.nc', '')
             if file_without_extension != id_ga_attribute:
-                self.status = 'info'
-                print("%s;ok;info;id: difference between filename "
-                      "and global attribute;;%s"
-                      % (self.filename_parts_list, VERSION))
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning,
+                                   "id: difference between filename and global attribute")
 
     def checkGeoLatMin(self):
-        if 'geospatial_lat_min' in \
-                self.conf_global_att['geo_spatial_temporal']:
+        if 'geospatial_lat_min' in self.conf_global_att['geo_spatial_temporal']:
             # get global attribute
             ga_lat_min = float(getattr(self.ds, 'geospatial_lat_min'))
             # get min valid value of LATITUDE variable
             value_min_lat = np.amin(self.valid_lat)
-
-            if abs(value_min_lat - ga_lat_min) > \
-                    self.conf_lat_lon:
-                self.status = 'info'
-                print("%s;ok;info;geospatial_lat_min: min value different "
-                      "from global attribute;%s vs %s;%s"
-                      % (self.filename_parts_list, value_min_lat, ga_lat_min, VERSION))
+            if abs(value_min_lat - ga_lat_min) > self.conf_lat_lon:
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning, "geospatial_lat_min: value different from attribute: "
+                                   + self.conf_format_coord.format(value_min_lat) + " vs "
+                                   + self.floatToFilledStringSafe(ga_lat_min, 5)
+                                   )
 
     def checkGeoLatMax(self):
-        if 'geospatial_lat_max' in \
-                self.conf_global_att['geo_spatial_temporal']:
+        if 'geospatial_lat_max' in self.conf_global_att['geo_spatial_temporal']:
             # get global attribute
             ga_lat_max = float(getattr(self.ds, 'geospatial_lat_max'))
 
             # get max valid value of LATITUDE variable
             value_max_lat = np.amax(self.valid_lat)
 
-            if abs(value_max_lat - ga_lat_max) > \
-                    self.conf_lat_lon:
-                self.status = 'info'
-                print("%s;ok;info;geospatial_lat_max: max value different "
-                      "from global attribute; %s vs %s;%s"
-                      % (self.filename_parts_list, value_max_lat, ga_lat_max, VERSION))
+            if abs(value_max_lat - ga_lat_max) > self.conf_lat_lon:
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning, "geospatial_lat_max: value different from attribute: "
+                                   + self.conf_format_coord.format(value_max_lat) + " vs "
+                                   + self.floatToFilledStringSafe(ga_lat_max, 5))
 
-    def getMinMaxMeridian(self, min_med=False, max_med=False):
-        if min_med:
-            return np.amin(np.ma.masked_where(
-                self.valid_lon < 0, self.valid_lon))
-        elif max_med:
-            return np.amax(np.ma.masked_where(
-                self.valid_lon > 0, self.valid_lon))
+    def checkGeoLonMinMax(self):
 
-    def checkGeoLonMin(self):
-        if 'geospatial_lon_min' \
-                in self.conf_global_att['geo_spatial_temporal']:
-            # get global attribute
-            ga_lon_min = float(getattr(self.ds, 'geospatial_lon_min'))
+        if ('geospatial_lon_min' in self.conf_global_att['geo_spatial_temporal']
+                or 'geospatial_lon_max' in self.conf_global_att['geo_spatial_temporal']):
+            min_lon, max_lon = PositionTools.computeLongitudeMinMax(self.valid_lon)
 
-            # get min valid value of LONGITUDE variable
-            if hasCrossedMeridian180(self.ds.variables['LONGITUDE'][:]):
-                min_lon = self.getMinMaxMeridian(min_med=True)
-            else:
-                min_lon = np.amin(self.valid_lon)
+            if 'geospatial_lon_min' in self.conf_global_att['geo_spatial_temporal']:
 
-            if abs(min_lon - ga_lon_min) > self.conf_lat_lon:
-                self.status = 'info'
-                print("%s;ok;info;geospatial_lon_min: min value different "
-                      "from global attribute;%s vs. %s;%s"
-                      % (self.filename_parts_list, min_lon, ga_lon_min, VERSION))
+                # Get the global attribute
+                ga_lon_min = float(getattr(self.ds, 'geospatial_lon_min'))
 
-    def checkGeoLonMax(self):
-        if 'geospatial_lon_max' \
-                in self.conf_global_att['geo_spatial_temporal']:
-            # get global attribute
-            ga_lon_max = float(getattr(self.ds, 'geospatial_lon_max'))
+                # Compare calculated and global attributes value
+                if abs(min_lon - ga_lon_min) > self.conf_lat_lon:
+                    self.status = _checkerContentWarning
+                    xmlReport.addValue(_checkerContentWarning, "geospatial_lon_min: value different from attribute: "
+                                       + self.conf_format_coord.format(min_lon) + " vs "
+                                       + self.floatToFilledStringSafe(ga_lon_min, 5))
 
-            # get max valid value of LONGITUDE variable
-            if hasCrossedMeridian180(self.ds.variables['LONGITUDE'][:]):
-                max_lon = self.getMinMaxMeridian(max_med=True)
-            else:
-                max_lon = np.amax(self.valid_lon)
+            if 'geospatial_lon_max' in self.conf_global_att['geo_spatial_temporal']:
 
-            if abs(max_lon - ga_lon_max) > \
-                    self.conf_lat_lon:
-                self.status = 'info'
-                print("%s;ok;info;geospatial_lon_max: max value different "
-                      "from global attribute;%s vs %s;%s"
-                      % (self.filename_parts_list, max_lon, ga_lon_max, VERSION))
+                # Get the global attribute
+                ga_lon_max = float(getattr(self.ds, 'geospatial_lon_max'))
+
+                # Compare calculated and global attributes value
+                if abs(max_lon - ga_lon_max) > self.conf_lat_lon:
+                    self.status = _checkerContentWarning
+                    xmlReport.addValue(_checkerContentWarning, "geospatial_lon_max: value different from attribute: "
+                                       + self.conf_format_coord.format(max_lon) + " vs "
+                                       + self.floatToFilledStringSafe(ga_lon_max, 5))
 
     def checkTimeCovStart(self):
-        if 'time_coverage_start' \
-                in self.conf_global_att['geo_spatial_temporal']:
+        if 'time_coverage_start' in self.conf_global_att['geo_spatial_temporal']:
             # get global attribute
-            time_coverage_start = datetime.strptime(
-                getattr(self.ds, 'time_coverage_start'),
-                '%Y-%m-%dT%H:%M:%SZ')
+            time_coverage_start = datetime.datetime.strptime(getattr(self.ds, 'time_coverage_start'),
+                                                             '%Y-%m-%dT%H:%M:%SZ')
             # get min valid value of TIME variable
-            time_coverage_min = \
-                num2date(np.amin(self.valid_time),
-                         units=self.ds.variables['TIME'].units)
-            time_coverage_min = roundDatetimeToSecond(time_coverage_min)
+            time_coverage_min = num2date(np.amin(self.valid_time), units=self.ds.variables['TIME'].units)
+            time_coverage_min = self._roundDatetimeToSecond(time_coverage_min)
 
-            if abs((time_coverage_start - time_coverage_min).total_seconds())\
-                    > self.conf_time:
-                self.status = 'info'
-                print("%s;ok;info;time_coverage_start: min value different "
-                      "from global attribute; %s vs %s;%s"
-                      % (self.filename_parts_list, time_coverage_min,
-                         time_coverage_start, VERSION))
+            if abs((time_coverage_start - time_coverage_min).total_seconds()) > self.conf_time:
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning, "time_coverage_start: value different from attribute: " +
+                                   str(time_coverage_min) + " vs " + str(time_coverage_start))
 
     def checkTimeCovEnd(self):
-        if 'time_coverage_end' \
-                in self.conf_global_att['geo_spatial_temporal']:
+        if 'time_coverage_end' in self.conf_global_att['geo_spatial_temporal']:
             # get global attribute
-            time_coverage_end = \
-                datetime.strptime(
-                    getattr(self.ds, 'time_coverage_end'),
-                    '%Y-%m-%dT%H:%M:%SZ')
+            time_coverage_end = datetime.datetime.strptime(getattr(self.ds, 'time_coverage_end'), '%Y-%m-%dT%H:%M:%SZ')
 
             # get max valid value of TIME variable
-            time_coverage_max = \
-                num2date(np.amax(self.valid_time),
-                         units=self.ds.variables['TIME'].units)
-            time_coverage_max = roundDatetimeToSecond(time_coverage_max)
+            time_coverage_max = num2date(np.amax(self.valid_time), units=self.ds.variables['TIME'].units)
+            time_coverage_max = self._roundDatetimeToSecond(time_coverage_max)
 
-            if abs((time_coverage_end - time_coverage_max).total_seconds())\
-                    > self.conf_time:
-                self.status = 'info'
-                print("%s;ok;info;time_coverage_end: max value different from "
-                      "global attribute;%s vs %s;%s"
-                      % (self.filename_parts_list, time_coverage_max,
-                         time_coverage_end, VERSION))
+            if abs((time_coverage_end - time_coverage_max).total_seconds()) > self.conf_time:
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning, "time_coverage_end: value different from attribute: " +
+                                   str(time_coverage_max) + " vs " + str(time_coverage_end))
 
     def checkGeoVertMin(self):
-        if 'geospatial_vertical_min' \
-                in self.conf_global_att['geo_spatial_temporal']:
+        if 'geospatial_vertical_min' in self.conf_global_att['geo_spatial_temporal']:
             if getattr(self.ds, 'geospatial_vertical_min') != " ":
                 # get global attribute
-                geospatial_vertical_min = \
-                    float(getattr(self.ds, 'geospatial_vertical_min'))
+                geospatial_vertical_min = float(getattr(self.ds, 'geospatial_vertical_min'))
 
                 # get min valid value of Z axis variable
-                z_axis_min = np.amin(self.valid_z_axis)
+                if self.valid_z_adj_axis is not None:
+                    z_values = np.ma.concatenate([self.valid_z_axis, self.valid_z_adj_axis])
+                else:
+                    z_values = self.valid_z_axis
+                z_axis_min = np.amin(z_values)
 
-                if abs(z_axis_min - geospatial_vertical_min) > \
-                        self.conf_depth:
-                    self.status = 'info'
-                    print("%s;ok;info;geospatial_vertical_min: "
-                          "min value different from global attribute;"
-                          "%s vs %s;%s"
-                          % (self.filename_parts_list, z_axis_min,
-                             geospatial_vertical_min, VERSION))
+                if abs(z_axis_min - geospatial_vertical_min) > self.conf_depth:
+                    self.status = _checkerContentWarning
+                    xmlReport.addValue(_checkerContentWarning,
+                                       "geospatial_vertical_min: value different from attribute: "
+                                       + self.conf_format_depth.format(z_axis_min) + " vs "
+                                       + self.floatToFilledStringSafe(geospatial_vertical_min, 2))
             else:
-                self.status = 'info'
-                print("%s;ok;info;geospatial_vertical_min: global "
-                      "attribute has no value;;%s"
-                      % self.filename_parts_list, VERSION)
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning, "geospatial_vertical_min: global attribute has no value")
 
     def checkGeoVertMax(self):
-        if 'geospatial_vertical_max' \
-                in self.conf_global_att['geo_spatial_temporal']:
+        if 'geospatial_vertical_max' in self.conf_global_att['geo_spatial_temporal']:
             if getattr(self.ds, 'geospatial_vertical_max') != " ":
                 # get global attribute
-                geospatial_vertical_max = \
-                    float(getattr(self.ds, 'geospatial_vertical_max'))
+                geospatial_vertical_max = float(getattr(self.ds, 'geospatial_vertical_max'))
 
                 # get max valid value of Z axis variable
-                z_axis_max = np.amax(self.valid_z_axis)
+                if self.valid_z_adj_axis is not None:
+                    z_values = np.ma.concatenate([self.valid_z_axis, self.valid_z_adj_axis])
+                else:
+                    z_values = self.valid_z_axis
+                z_axis_max = np.amax(z_values)
 
-                if abs(z_axis_max - geospatial_vertical_max) > \
-                        self.conf_depth:
-                    self.status = 'info'
-                    print("%s;ok;info;geospatial_vertical_max: "
-                          "max value different from global attribute;"
-                          "%s vs %s;%s"
-                          % (self.filename_parts_list, z_axis_max,
-                             geospatial_vertical_max, VERSION))
+                if abs(z_axis_max - geospatial_vertical_max) > self.conf_depth:
+                    self.status = _checkerContentWarning
+                    xmlReport.addValue(_checkerContentWarning,
+                                       "geospatial_vertical_max: value different from attribute: "
+                                       + self.conf_format_depth.format(z_axis_max) + " vs "
+                                       + self.floatToFilledStringSafe(geospatial_vertical_max, 2))
             else:
-                self.status = 'info'
-                print("%s;ok;info;geospatial_vertical_max: "
-                      "global attribute has no value;;%s"
-                      % (self.filename_parts_list, VERSION))
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning, "geospatial_vertical_max: global attribute has no value")
 
     def checkLastValidObs(self):
-        if 'last_valid_observation' \
-                in self.conf_global_att['provenance']:
-            time_data = \
-                self.ds.variables['TIME'][self.one_dim_valid_data_mask]
-            last_date_data = num2date(time_data[-1],
-                                      units=self.ds.variables['TIME'].units)
-            last_date_data = roundDatetimeToSecond(last_date_data)
+        if 'last_valid_observation' in self.conf_global_att['provenance']:
+            time_data = self.ds.variables['TIME'][self.one_dim_valid_data_mask]
+            last_date_data = num2date(time_data[-1], units=self.ds.variables['TIME'].units)
+            last_date_data = self._roundDatetimeToSecond(last_date_data)
 
             if len(self.ds.variables['LATITUDE']) > 1:
-                lat_data = \
-                    self.ds.variables['LATITUDE'][self.one_dim_valid_data_mask]
+                lat_data = self.ds.variables['LATITUDE'][self.one_dim_valid_data_mask]
                 last_lat_data = lat_data[-1]
             else:
                 last_lat_data = self.ds.variables['LATITUDE'][:]
 
             if len(self.ds.variables['LONGITUDE']) > 1:
-                lon_data = \
-                    self.ds.variables['LONGITUDE'][self.one_dim_valid_data_mask]
+                lon_data = self.ds.variables['LONGITUDE'][self.one_dim_valid_data_mask]
                 last_lon_data = lon_data[-1]
             else:
                 last_lon_data = self.ds.variables['LONGITUDE'][:]
 
             # comparisons with global attributes
-            last_date_att = datetime.strptime(
-                getattr(self.ds, 'last_date_observation'),
-                '%Y-%m-%dT%H:%M:%SZ')
-            if abs((last_date_att - last_date_data).total_seconds())\
-                    > self.conf_time:
-                self.status = 'info'
-                print("%s;ok;info;last_date_observation : last valid value "
-                      "different from global attribute;%s vs %s;%s"
-                      % (self.filename_parts_list, last_date_data,
-                         last_date_att, VERSION))
+            last_date_att = datetime.datetime.strptime(getattr(self.ds, 'last_date_observation'), '%Y-%m-%dT%H:%M:%SZ')
+            if abs((last_date_att - last_date_data).total_seconds()) > self.conf_time:
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning,
+                                   "last_date_observation : last valid value different from attribute: "
+                                   + str(last_date_data) + " vs " + str(last_date_att))
 
-            last_lat_att = \
-                float(getattr(self.ds, 'last_latitude_observation'))
-            if abs(last_lat_data - last_lat_att) > \
-                    self.conf_lat_lon:
-                self.status = 'info'
-                print("%s;ok;info;last_latitude_observation : last valid value "
-                      "different from global attribute;%s vs %s;%s"
-                      % (self.filename_parts_list, last_lat_data, last_lat_att, VERSION))
+            last_lat_att = float(getattr(self.ds, 'last_latitude_observation'))
+            if abs(last_lat_data - last_lat_att) > self.conf_lat_lon:
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning,
+                                   "last_latitude_observation : last valid value different from attribute: "
+                                   + self.conf_format_coord.format(last_lat_data) + " vs "
+                                   + self.floatToFilledStringSafe(last_lat_att, 5))
 
-            last_lon_att = \
-                float(getattr(self.ds, 'last_longitude_observation'))
-            if abs(last_lon_data - last_lon_att) > \
-                    self.conf_lat_lon:
-                self.status = 'info'
-                print("%s;ok;info;last_longitude_observation : last valid value"
-                      " different from global attribute;%s vs %s;%s"
-                      % (self.filename_parts_list, last_lon_data, last_lon_att, VERSION))
-
-
-def add_duration(date_begin):
-    date_end = datetime.now()
-    duration_date = date_end - date_begin
-    duration = []
-    hours, remainder = divmod(duration_date.seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    duration.append(str(hours).zfill(2))
-    duration.append(str(minutes).zfill(2))
-    duration.append(str(seconds).zfill(2))
-    duration_display = ':'.join(duration)
-    return duration_display
+            last_lon_att = float(getattr(self.ds, 'last_longitude_observation'))
+            if abs(last_lon_data - last_lon_att) > self.conf_lat_lon:
+                self.status = _checkerContentWarning
+                xmlReport.addValue(_checkerContentWarning,
+                                   "last_longitude_observation : last valid value different from attribute: "
+                                   + self.conf_format_coord.format(last_lon_data) + " vs "
+                                   + self.floatToFilledStringSafe(last_lon_att, 5))
 
 
 def checkFilesList(dir_path, file_paths, pattern):
@@ -564,145 +876,136 @@ def checkFilesList(dir_path, file_paths, pattern):
     return file_paths
 
 
-def splitForPrintFilename(filename):
-    no_extension = basename(filename).replace('.nc', '')
-    file_parts = re.split('_', no_extension)
-    if len(file_parts) < 5:
-        file_parts.append(' ')
-    return ';'.join(file_parts)
+def initializeXmlReport():
+    """
+        Initialize XML report
+    """
+
+    """ XML Report - instanciate """
+    global xmlReport
+    xmlReport = XmlReport()
+    xmlReport.begin(_function, _comment)
 
 
-def readTimeValue(days_since):
-    return num2date(days_since, units="days since 1950-01-01T00:00:00Z")
+def exitWithError(error):
+    """
+        Exit with a given error
+        Generate XML error reports
+    """
+    xmlReport.addError(error)
+    xmlReport.addDuration()
+    xmlReport.addStatusNok()
+    xmlReport.end()
+    sys.exit(1)
 
 
-def roundDatetimeToSecond(dt):
-    rounding = (dt.microsecond + 500000) // 1000000
-    return dt + timedelta(0, rounding, -dt.microsecond)
+def exitWithErrorTag(tag, error):
+    xmlReport.addValue(tag, error)
+    xmlReport.addDuration()
+    xmlReport.addStatusNok()
+    xmlReport.end()
+    sys.exit(1)
 
 
-def hasCrossedMeridian180(longitudes):
-    if max(longitudes) - min(longitudes) > 180:
-        return True
-    else:
-        return False
-
-
-def computeLongitudeMinMax(longitudes):
-    meridian180 = False
-    min_lon = None
-    max_lon = None
-
-    for longitude in longitudes:
-        if min_lon is None and max_lon is None:
-            min_lon = longitude
-            max_lon = longitude
-
-        if not meridian180:
-            if max_lon - longitude > 180:
-                max_lon = longitude
-                meridian180 = True
-            elif min_lon - longitude < -180:
-                min_lon = longitude
-                meridian180 = True
-            else:
-                if longitude > max_lon:
-                    max_lon = longitude
-                elif longitude < min_lon:
-                    min_lon = longitude
-        else:
-            if 0 < longitude < min_lon:
-                min_lon = longitude
-            elif 0 > longitude > max_lon:
-                max_lon = longitude
-    return min_lon, max_lon
+def successProcess():
+    """
+        Generate XML success reports
+    """
+    xmlReport.addDuration()
+    xmlReport.addStatusOk()
+    xmlReport.end()
 
 
 def main():
-    process_start = datetime.now()
+    """ Instanciate xml Report """
+    initializeXmlReport()
+
+    xmlReport.addValue("version", str(VERSION))
     file_paths = []
 
-    if len(sys.argv) == 3:
-        # build file_paths list
-        pattern = r'\.nc$'
-        if not isdir(sys.argv[1]):
-            if re.search(pattern, sys.argv[1]):
-                file_paths.append(sys.argv[1])
-            else:
-                print("Incorrect file: %s; choose a nc file or a folder "
-                      "containing nc files" % sys.argv[1])
-                sys.exit(1)
+    if len(sys.argv) != 3:
+        exitWithError("Incorrect number of parameter, usage: CONF_FILE ( FILE | DIR )")
+
+    # load configuration file
+    conf_file = sys.argv[1]
+
+    try:
+        with open(conf_file, 'r', encoding='utf-8') as fd:
+            conf = json.load(fd)
+    except Exception as err:
+        print('Error loading configuration file: {}'.format(err))
+        sys.exit(1)
+
+    # build file_paths list
+    xmlReport.addValue("input_path", str(sys.argv[2]))
+    pattern = r'\.nc$'
+    if not isdir(sys.argv[2]):
+        if re.search(pattern, sys.argv[2]):
+            file_paths.append(sys.argv[2])
         else:
-            file_paths = checkFilesList(sys.argv[1], file_paths, pattern)
+            exitWithError("Incorrect file: %s; choose a nc file or a folder containing nc files" % sys.argv[2])
+    else:
+        file_paths = checkFilesList(sys.argv[2], file_paths, pattern)
 
-        # load configuration file
-        conf_file = sys.argv[2]
+    # output header
+    xmlReport.addValue("nb_files", str(len(file_paths)))
+
+    # file processing
+    for i in range(len(file_paths)):
         try:
-            with open(conf_file, 'r', encoding='utf-8') as fd:
-                conf = json.load(fd)
-        except Exception as err:
-            print('Error loading configuration file: {}'.format(err))
-            sys.exit(1)
+            xmlReport.addValue("file_name", str(basename(file_paths[i])))
 
-        # output header
-        print("Found %s nc files" % len(file_paths))
-        print("DAC;File type;Data type;platformCode;suffix;checker status;"
-              "content status;label;values;version")
+            # is file_type/data_type in grey list ?
+            split_filename = basename(file_paths[i]).split('_')
+            if split_filename[1] in conf['file_type_grey_list']:
+                raise Exception(f"file_type not compatible: '{split_filename[1]}'")
+            if split_filename[2] in conf['data_type_grey_list']:
+                raise Exception(f"data_type not compatible: '{split_filename[2]}'")
 
-        # file processing
-        for i in range(len(file_paths)):
-            try:
-                # is file_type/data_type in grey list ?
-                split_filename = basename(file_paths[i]).split('_')
-                if split_filename[1] in conf['file_type_grey_list']:
-                    raise Exception("file_type not checked")
-                if split_filename[2] in conf['data_type_grey_list']:
-                    raise Exception("data_type not checked")
+            cc = ContentChecker(file_paths[i], conf)
+            cc.checkIfDtypeBoundsValues()
+            cc.checkTimeAsc()
+            cc.checkCdmDataType()
+            cc.checkDataMode()
+            # naming global attributes tests
+            if cc.checkFilenamePattern():
+                cc.checkPlatformCode()
+                cc.checkID()
+            else:
+                raise Exception("filename doesn't respect pattern")
 
-                cc = ContentChecker(file_paths[i], conf)
-
-                cc.checkTimeAsc()
-                cc.checkValidData()
-                cc.checkFillValueQC()
+            # check if valid data for global attributes calculations
+            if cc.file_type != conf['spectra_file_pattern']:
+                cc.checkUncontrolledQC()
                 cc.checkVerticalAxis()
-                cc.checkCdmDataType()
-                cc.checkDataMode()
+            else:
+                cc.checkUncontrolledQC(extra_checked_parameters=['VSPEC1D_QC'])
 
-                # naming global attributes tests
-                if cc.checkFilenamePattern():
-                    cc.checkPlatformCode()
-                    cc.checkID()
-                else:
-                    raise Exception("filename doesn't respect pattern")
+            cc.checkFillValueQC()
+            cc.checkValidData()
 
-                # geo spatio temporal global attributes
-                cc.checkGeoLatMin()
-                cc.checkGeoLatMax()
-                cc.checkGeoLonMin()
-                cc.checkGeoLonMax()
-                cc.checkTimeCovStart()
-                cc.checkTimeCovEnd()
+            # geo spatio temporal global attributes
+            cc.checkGeoLatMin()
+            cc.checkGeoLatMax()
+            cc.checkGeoLonMinMax()
+            cc.checkTimeCovStart()
+            cc.checkTimeCovEnd()
+            if cc.file_type != conf['spectra_file_pattern']:
                 cc.checkGeoVertMin()
                 cc.checkGeoVertMax()
+            cc.checkLastValidObs()
 
-                cc.checkLastValidObs()
+            # if passed
+            if cc.status == 'ok':
+                xmlReport.addValue(_checkerContentInfo, _checkerFileCompliantLabel)
+            cc.close_ds()
+        except MemoryError as e:
+            xmlReport.addValue(_checkerContentError,
+                               "File verification interrupted: memory error, file size is too large")
+        except Exception as e:
+            xmlReport.addValue(_checkerContentError, "File verification interrupted: " + str(e))
 
-                # if passed
-                if cc.status == 'ok':
-                    print("%s;ok;ok;;;%s;" % (cc.filename_parts_list, VERSION))
-
-                cc.close_ds()
-
-            except Exception as e:
-                print("%s;ko;;%s;;%s;" %
-                      (splitForPrintFilename(file_paths[i]), e, VERSION))
-
-    else:
-        print("\nIncorrect number of arguments: \n"
-              " - file : path to file to control\n"
-              " - conf_file : path to json configuration file\n")
-
-    print("\nExecution time: %s" % add_duration(process_start))
+    successProcess()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 {
-	"file_type_grey_list": ["WS"],
+	"file_type_grey_list": [],
 	"data_type_grey_list": ["HF", "RF"],
+	"spectra_file_pattern": "WS",
 	"checkDimensions": true,
 	"checkValidData": true,
 	"checkVerticalAxis": true,
@@ -15,11 +16,15 @@
 	},
 	"global_attributes": {
 		"identification": ["platform_code", "id", "source"],
-		"geo_spatial_temporal": ["geospatial_lat_min", "geospatial_lat_max", "geospatial_lon_min", "geospatial_lon_max", "geospatial_vertical_min", "geospatial_vertical_max", "time_coverage_start", "time_coverage_end"],
+		"geo_spatial_temporal": ["geospatial_lat_min", "geospatial_lat_max", "geospatial_lon_min", "geospatial_lon_max",
+			"geospatial_vertical_min", "geospatial_vertical_max", "time_coverage_start", "time_coverage_end"],
 		"provenance": ["last_valid_observation"]
 	},
 	"valid_coordinate_variables_QC": [1, 2, 5, 7, 8],
+	"uncontrolled_qc" : 0,
 	"valid_lat_lon_delta": 0.00001,
 	"valid_depth_delta": 0.001,
-	"valid_seconds_delta": 0.5
+	"valid_seconds_delta": 0.5,
+	"format_coordinates": "{:.5f}",
+	"format_deph": "{:.2f}"
 }
