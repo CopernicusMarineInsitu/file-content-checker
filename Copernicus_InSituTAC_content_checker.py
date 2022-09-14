@@ -7,6 +7,9 @@
 # ****************************************************************************
 #
 # HST : 05/04/2021 ED  Creation
+#       20/07/2022 ED  Add "GL_PR_PF" exceptions (checkTimeEqualOrAsc, option ignore_fv_adjusted for checkFillValueQC)
+#       08/09/2022 ED  Add -get_regions option
+#       12/09/2022 ED  Optimize PositionTools.ComputeRegions, fixed platforms
 #
 # ****************************************************************************
 
@@ -17,15 +20,13 @@ import sys
 import json
 import re
 from os import listdir, environ
-from os.path import isdir, isfile, basename, dirname
-
-from math import cos, acos, sin
+from os.path import isdir, isfile, basename
 
 """
     Process function identification
 """
 _function = "CO-03-08-05"
-_comment = "Netcdf Content Checker based on Copernicus_InSituTAC_content_checker"
+_comment = "Netcdf Content Checker"
 
 """
     Content Checker Variables
@@ -39,6 +40,7 @@ _checkerContentError = 'file_error'
 _checkerContentWarning = 'file_warning'
 _checkerContentInfo = 'file_info'
 _checkerFileCompliantLabel = 'file is compliant'
+_getRegionArg = '-get_regions'
 
 """
     Position Tools Variables
@@ -46,6 +48,31 @@ _checkerFileCompliantLabel = 'file is compliant'
 _PI_RADIAN = 3.141592653589793238
 _PI_DEGREE = 180.0
 _RAYON = 6371000.0
+_GOOD_QC = 1
+_DEFAULT_REGION = 'GL'
+_ARCTIC = [
+    [60.0, -180.0, 90.0, 180.0]]
+_BALTIC = [
+    [53.0, 8.0, 62.0, 15.0],
+    [53.0, 15.0, 66.0, 31.0]]
+_BLACKSEA = [
+    [40.0, 26.0, 47.5, 42.0]]
+_MEDITERRANEAN = [
+    [28.0, -5.61, 41.0, 37.0],
+    [41.0, 0.0, 45.8, 20.0]]
+_NORTHWESTSHELF = [
+    [48.0, -45.0, 71.5, 31.5]]
+_SOUTHWESTSHELF = [
+    [19.0, -50.0, 60.0, 9.0]]
+
+_AREA_DEFINITION = {
+    "AR": _ARCTIC,
+    "BO": _BALTIC,
+    "BS": _BLACKSEA,
+    "MO": _MEDITERRANEAN,
+    "NO": _NORTHWESTSHELF,
+    "IR": _SOUTHWESTSHELF
+}
 
 
 class XmlReport():
@@ -194,40 +221,11 @@ class XmlReport():
         self.out("</" + self._reportTag + ">")
 
 
+class PositionToolsError(Exception):
+    pass
+
+
 class PositionTools:
-
-    @staticmethod
-    def computeDistancesBetweenTwoPositions(latitude1, longitude1, latitude2, longitude2):
-        """
-            Compute speed between two positions
-        """
-        l_lat1 = (latitude1 * _PI_RADIAN) / _PI_DEGREE
-        l_lon1 = (longitude1 * _PI_RADIAN) / _PI_DEGREE
-        l_lat2 = (latitude2 * _PI_RADIAN) / _PI_DEGREE
-        l_lon2 = (longitude2 * _PI_RADIAN) / _PI_DEGREE
-
-        l_dlon = l_lon2 - l_lon1
-
-        if l_dlon < -_PI_RADIAN:
-            l_dlon += 2 * _PI_DEGREE
-            l_dlon += 2 * _PI_RADIAN
-
-        if l_dlon > _PI_RADIAN:
-            l_dlon -= 2 * _PI_DEGREE
-            l_dlon -= 2 * _PI_RADIAN
-
-        distanceX = _RAYON * cos((l_lat1 + l_lat2) / 2) * l_dlon
-        distanceY = _RAYON * (l_lat2 - l_lat1)
-        angle = cos(l_lat1) * cos(l_lat2) * cos(l_lon1 - l_lon2) + sin(l_lat1) * sin(l_lat2)
-
-        if angle > 1.0:
-            angle = 1.0
-        elif angle < -1.0:
-            angle = -1
-
-        distance = _RAYON * acos(angle)
-
-        return distanceX, distanceY, distance
 
     @staticmethod
     def computeLongitudeMinMax(longitudes):
@@ -272,6 +270,76 @@ class PositionTools:
             previous_longitude = longitude
         return min_lon, max_lon
 
+    @staticmethod
+    def ComputeRegions(latitudes, longitudes, fixed=False, filter_data=False, positions_qc=None, good_qc_list=None):
+        """
+        Compute regions from coordinates
+        If positions are already filtered, do not specify positions_qc and good_qc_list
+
+        @param latitudes: array of latitude
+        @param longitudes: array of longitudes
+        @param fixed: optional, True if platform is fixed. Default is False.
+        @param filter_data: optional, True if user wants to filter data using qc array. Default is False.
+        @param positions_qc: optional, array of position_qc (only if filter_data is True)
+        @param good_qc_list: optional (only if filter_data is True), list of good qc
+        @return: list of areas where positions are located
+        """
+
+        region_list = [_DEFAULT_REGION, ]
+
+        """ Check if parameter dimensions are equals """
+        if len(latitudes) != len(longitudes):
+            raise PositionToolsError('ComputeRegionsFromTrajectory - Invalid counts between latitude and ' +
+                                     'longitude : ' +
+                                     ' vs '.join([str(len(latitudes)), str(len(longitudes)), str(len(positions_qc))]))
+
+        """ If platform is fixed, simplify arrays """
+        if fixed:
+            latitudes = np.array([latitudes[0], latitudes[-1]])
+            longitudes = np.array([longitudes[0], longitudes[-1]])
+            if positions_qc is not None:
+                positions_qc = np.array([positions_qc[0], positions_qc[-1]])
+
+        """ Filter positions """
+        if filter_data:
+            if good_qc_list is None or positions_qc is None:
+                raise PositionToolsError('ComputeRegionsFromTrajectory - Error occurred when filtering data ' +
+                                         'using positions qc: No array specified ')
+            if len(latitudes) != len(positions_qc):
+                raise PositionToolsError('ComputeRegionsFromTrajectory - Invalid counts between latitude, ' +
+                                         'longitude and position_qc: ' +
+                                         ' vs '.join(
+                                             [str(len(latitudes)), str(len(longitudes)), str(len(positions_qc))]))
+
+            qc_mask = np.isin(positions_qc, good_qc_list)
+            latitudes = latitudes[qc_mask]
+            longitudes = longitudes[qc_mask]
+
+        """ For each regions, check if any latitude-longitude tuple match conditions """
+        for region_name in _AREA_DEFINITION.keys():
+            region_found = False
+            for region_rectangle in _AREA_DEFINITION[region_name]:
+                if not region_found:
+                    lower_limit = region_rectangle[0]
+                    left_limit = region_rectangle[1]
+                    upper_limit = region_rectangle[2]
+                    right_limit = region_rectangle[3]
+
+                    # For each position, check if coordinates (latitude AND longitude) is in zone:
+                    region_check_positive = ((lower_limit <= latitudes) & (latitudes <= upper_limit) &
+                                             (left_limit <= longitudes) & (longitudes <= right_limit)).any()
+
+                    if region_check_positive:
+                        # At least one coordinate is in region
+                        region_found = True
+                        break
+
+            # Add to region list if spotted
+            if region_found:
+                region_list.append(region_name)
+
+        return region_list
+
 
 class ContentCheckerUtils:
 
@@ -304,18 +372,19 @@ class ContentCheckerUtils:
     #     return float(Decimal(float(value)).quantize(Decimal(decimals), rounding=ROUND_HALF_UP))
 
     @staticmethod
-    def floatToFilledStringSafe(float: np.float, digits: int) -> str:
+    def floatToFilledStringSafe(fl: float, digits: int) -> str:
         """ Convert float to string with trailing zeros up to N digits, without altering value if more than N digits """
-        if not isinstance(float, np.float):
+        if not isinstance(fl, float):
             raise TypeError("floatToFilledStringSafe: value is not a float")
-        return str(float).split('.')[0] + '.' + str(float).split('.')[1].ljust(digits, '0')
+        return str(fl).split('.')[0] + '.' + str(fl).split('.')[1].ljust(digits, '0')
 
     def getDataTypeMinMax(self, data_type):
         """ Get Min Max of specified data type : integers or float only else return None, None """
         data_type_info = None
-        if data_type in (int, np.int, np.int8, np.int16, np.int32, np.int64):
+        if data_type in (int, np.int8, 'b', np.int16, np.uint16, np.short, np.ushort, 'int16', 'uint16',
+                         np.int32, np.int64, 'i4'):
             data_type_info = np.iinfo(data_type)
-        elif data_type in (float, np.float, np.float16, np.float32, np.float64):
+        elif data_type in (float, np.float16, np.float32, np.float64, 'f4'):
             data_type_info = np.finfo(data_type)
         return (data_type_info.min, data_type_info.max) if data_type_info is not None else (None, None)
 
@@ -358,7 +427,7 @@ class ContentChecker(ContentCheckerUtils):
         for variable in self.getDsVariablesNameList():
             if variable in ('DEPH', 'PRES'):
                 if 'axis' in self.ds[variable].ncattrs():
-                    if self.ds[variable].axis is 'Z':
+                    if self.ds[variable].axis == 'Z':
                         z_axis_variable = variable
         if z_axis_variable == "":
             raise Exception("no vertical axis defined")
@@ -489,8 +558,29 @@ class ContentChecker(ContentCheckerUtils):
     def getFileDataType(self):
         return self.file_basename.split('_')[1]
 
+    def checkCoordinatesFillValue(self):
+        """ Check if any of the coordinates variables and their associated qc variable contains fillValue """
+
+        variables = ['TIME', 'TIME_QC', 'LATITUDE', 'LONGITUDE', 'POSITION_QC']
+        for variable_name in variables:
+            if variable_name in self.ds.variables.keys():
+                if np.ma.is_masked(self.ds.variables[variable_name][:]):
+                    self.status = _checkerContentWarning
+                    xmlReport.addValue(_checkerContentWarning,
+                                       f"{variable_name}: parameter has fill value")
+
+    def checkCoordinatesMissingQC(self):
+        """ Check if coordinates QC parameters contains QC 9 """
+        variables = ['TIME_QC', 'POSITION_QC']
+        for variable_name in variables:
+            if variable_name in self.ds.variables.keys():
+                if self.conf['missing_qc'] in self.ds.variables[variable_name][:]:
+                    self.status = _checkerContentWarning
+                    xmlReport.addValue(_checkerContentWarning,
+                                       f"{variable_name}: parameter has missing value QC")
+
     def checkTimeAsc(self):
-        # check if TIME is monotonically ascending
+        """ check if TIME is monotonically ascending """
         time_data = self.ds.variables['TIME']
 
         if not (np.all(time_data[:-1] < time_data[1:])):
@@ -499,6 +589,18 @@ class ContentChecker(ContentCheckerUtils):
             else:
                 self.status = _checkerContentError
                 xmlReport.addValue(_checkerContentError, "<TIME> is not strictly monotonic")
+
+    def checkTimeEqualOrAsc(self):
+        """ check if TIME have ONLY consecutive values that are equals or increasing """
+        time_data = self.ds.variables['TIME']
+
+        if not (np.all(time_data[:-1] <= time_data[1:])):
+            if time_data.valid_max != 90000:
+                raise Exception("error with <TIME> attributes")
+            else:
+                self.status = _checkerContentError
+                xmlReport.addValue(_checkerContentError, "TIME have consecutive values that are " +
+                                                         "not equal or not increasing")
 
     def checkIfDtypeBoundsValues(self):
         """ Check if data array contains data type bounding values (example: min/max int32)"""
@@ -530,10 +632,10 @@ class ContentChecker(ContentCheckerUtils):
             if not valid_data_found and np.all(np.invert(self.valid_data_mask)):
                 raise Exception(f"file has no data with valid (POSITION_QC, TIME_QC{z_qc_labels})")
 
-    def checkFillValueQC(self):
+    def checkFillValueQC(self, ignore_fv_adjusted=False):
         # check for error in QC like:
         #       <PARAM> _FillValue has valid QC in <PARAM_QC>
-        #       <PARAM_QC> _FillValue has a value in <PARAM>
+        #       <PARAM_QC> _FillValue has a value in <PARAM>: can be deactivated if ignore_fv_adjusted == True
         for variable, qc_data in self.ds.variables.items():
             if qc_label in variable and variable not in ['TIME_QC', 'POSITION_QC']:
                 pp_label = variable.replace(qc_label, '')
@@ -546,7 +648,8 @@ class ContentChecker(ContentCheckerUtils):
                 fillValue_pp_mask = np.isin(pp_data, pp_data.getncattr('_FillValue'), invert=True)
                 masked_qc_data = np.ma.masked_where(fillValue_pp_mask, qc_data).compressed()
 
-                if np.any(np.isin(masked_qc_data, self.valid_qc)):
+                # If ignore_fv_adjusted, fillValue can be put in from of valid qc value
+                if np.any(np.isin(masked_qc_data, self.valid_qc)) and not (adjusted_label in variable and ignore_fv_adjusted):
                     xmlReport.addValue(_checkerContentError, "parameter has FillValues with valid QC: " + str(pp_label))
                     self.status = _checkerContentError
 
@@ -746,8 +849,7 @@ class ContentChecker(ContentCheckerUtils):
     def checkTimeCovStart(self):
         if 'time_coverage_start' in self.conf_global_att['geo_spatial_temporal']:
             # get global attribute
-            time_coverage_start = datetime.datetime.strptime(getattr(self.ds, 'time_coverage_start'),
-                                                             '%Y-%m-%dT%H:%M:%SZ')
+            time_coverage_start = datetime.datetime.strptime(getattr(self.ds, 'time_coverage_start'), '%Y-%m-%dT%H:%M:%SZ')
             # get min valid value of TIME variable
             time_coverage_min = num2date(np.amin(self.valid_time), units=self.ds.variables['TIME'].units)
             time_coverage_min = self._roundDatetimeToSecond(time_coverage_min)
@@ -859,6 +961,15 @@ class ContentChecker(ContentCheckerUtils):
                                    + self.conf_format_coord.format(last_lon_data) + " vs "
                                    + self.floatToFilledStringSafe(last_lon_att, 5))
 
+    def getFileRegions(self, isFixed=False):
+        """ Get file regions from data bounds """
+
+        """ Retrieve file regions """
+        regions = PositionTools.ComputeRegions(self.valid_lat, self.valid_lon, fixed=isFixed)
+
+        """ Add regions to xml report """
+        xmlReport.addValue('regions', ",".join(regions))
+
 
 def checkFilesList(dir_path, file_paths, pattern):
     # from Maria (MED)
@@ -922,9 +1033,19 @@ def main():
 
     xmlReport.addValue("version", str(VERSION))
     file_paths = []
+    get_regions = False
 
-    if len(sys.argv) != 3:
-        exitWithError("Incorrect number of parameter, usage: CONF_FILE ( FILE | DIR )")
+    arg_error_msg = f"Incorrect number of parameter, usage: CONF_FILE ( FILE | DIR ) [{_getRegionArg}]"
+
+    if len(sys.argv) > 4:
+        exitWithError(arg_error_msg)
+
+    # Get regions arg
+    if len(sys.argv) == 4:
+        if sys.argv[3] == _getRegionArg:
+            get_regions = True
+        else:
+            exitWithError(arg_error_msg)
 
     # load configuration file
     conf_file = sys.argv[1]
@@ -964,7 +1085,15 @@ def main():
 
             cc = ContentChecker(file_paths[i], conf)
             cc.checkIfDtypeBoundsValues()
-            cc.checkTimeAsc()
+            cc.checkCoordinatesFillValue()
+            cc.checkCoordinatesMissingQC()
+
+            # Check if consecutive time values are equal or increasing
+            if "_".join(split_filename[0:3]) in conf["time_equal_exceptions_list"]:
+                cc.checkTimeEqualOrAsc()
+            else:
+                cc.checkTimeAsc()
+
             cc.checkCdmDataType()
             cc.checkDataMode()
             # naming global attributes tests
@@ -981,13 +1110,20 @@ def main():
             else:
                 cc.checkUncontrolledQC(extra_checked_parameters=['VSPEC1D_QC'])
 
-            cc.checkFillValueQC()
+            ignore_fv_adjusted = True if "_".join(split_filename[0:3]) in conf["ignore_fillvalue_adjusted_list"] else False
+            cc.checkFillValueQC(ignore_fv_adjusted)
             cc.checkValidData()
 
             # geo spatio temporal global attributes
             cc.checkGeoLatMin()
             cc.checkGeoLatMax()
             cc.checkGeoLonMinMax()
+
+            # Add regions to xml report only if requested
+            if get_regions:
+                pl_is_fixed = True if split_filename[2] in conf['fixed_pl_data_type'] else False
+                cc.getFileRegions(isFixed=pl_is_fixed)
+
             cc.checkTimeCovStart()
             cc.checkTimeCovEnd()
             if cc.file_type != conf['spectra_file_pattern']:
@@ -1000,8 +1136,7 @@ def main():
                 xmlReport.addValue(_checkerContentInfo, _checkerFileCompliantLabel)
             cc.close_ds()
         except MemoryError as e:
-            xmlReport.addValue(_checkerContentError,
-                               "File verification interrupted: memory error, file size is too large")
+            xmlReport.addValue(_checkerContentError, "File verification interrupted: memory error, file size is too large")
         except Exception as e:
             xmlReport.addValue(_checkerContentError, "File verification interrupted: " + str(e))
 

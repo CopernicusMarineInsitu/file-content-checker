@@ -1,6 +1,9 @@
 {
 	"file_type_grey_list": [],
 	"data_type_grey_list": ["HF", "RF"],
+	"fixed_pl_data_type": ["HF", "RF", "TG", "MO"],
+	"time_equal_exceptions_list": ["GL_PR_PF"],
+	"ignore_fillvalue_adjusted_list": ["GL_PR_PF"],
 	"spectra_file_pattern": "WS",
 	"checkDimensions": true,
 	"checkValidData": true,
@@ -22,6 +25,7 @@
 	},
 	"valid_coordinate_variables_QC": [1, 2, 5, 7, 8],
 	"uncontrolled_qc" : 0,
+	"missing_qc": 9,
 	"valid_lat_lon_delta": 0.00001,
 	"valid_depth_delta": 0.001,
 	"valid_seconds_delta": 0.5,
