@@ -1,4 +1,4 @@
-# Copernicus NetCDF4 file content checker (v1.4)
+# Copernicus NetCDF4 file content checker (v1.5)
 
 ## Updates:
 
