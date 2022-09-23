@@ -1,16 +1,17 @@
-# Copernicus NetCDF4 file content checker (v1.5)
+# Copernicus NetCDF4 file content checker (v1.5.1)
 
 ## Updates:
 
 * Generate XML output
 * Accept Wave Spectra files
+* Update region limit
 
 ## Activate a conda environment with python=3.6 and netCDF4 packages installed
 
 ## Execute following command :
  
 ````
-    python Copernicus-InSituTAC-content-checker.py /path/to/folder/to/verify Copernicus-InSituTAC-content-checker.json > report_name.csv
+    python Copernicus-InSituTAC-content-checker.py /path/to/folder/to/verify Copernicus-InSituTAC-content-checker.json -get_regions > report_name.csv
 ````
 
 with     
@@ -65,5 +66,7 @@ last_date_observation       	(one-dimension mask combination of (TIME_QC, POSITI
 last_latitude_observation	(one-dimension mask combination of (TIME_QC, POSITION_QC, <z_axis>_QC)
 
 last_longitude_observation (one-dimension mask combination of (TIME_QC, POSITION_QC, <z_axis>_QC)
+ 
+check regions which the file belong to (example of output: <regions>GL,AR,BO,NO,IR</regions>)
 ````
 
