@@ -10,6 +10,7 @@
 #       20/07/2022 ED  Add "GL_PR_PF" exceptions (checkTimeEqualOrAsc, option ignore_fv_adjusted for checkFillValueQC)
 #       08/09/2022 ED  Add -get_regions option
 #       12/09/2022 ED  Optimize PositionTools.ComputeRegions, fixed platforms
+#       23/09/2022 ED  issue 3432: Update regions limits
 #
 # ****************************************************************************
 
@@ -61,9 +62,9 @@ _MEDITERRANEAN = [
     [28.0, -5.61, 41.0, 37.0],
     [41.0, 0.0, 45.8, 20.0]]
 _NORTHWESTSHELF = [
-    [48.0, -45.0, 71.5, 31.5]]
+    [48.0, -45.0, 71.5, 13]]
 _SOUTHWESTSHELF = [
-    [19.0, -50.0, 60.0, 9.0]]
+    [20, -40.0, 60.0, 5.0]]
 
 _AREA_DEFINITION = {
     "AR": _ARCTIC,
